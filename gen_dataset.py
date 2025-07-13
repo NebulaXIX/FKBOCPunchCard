@@ -1,44 +1,94 @@
 import os
 import random
-import shutil
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from pathlib import Path
 
 # 配置参数
 DATASET_DIR = "dataset"  # 数据集根目录
 IMAGE_SIZE = (128, 128)  # 图像尺寸
-NUM_IMAGES = 5000  # 总图像数量
+NUM_IMAGES = 50000  # 总图像数量
 TRAIN_RATIO = 0.7  # 训练集比例
 VAL_RATIO = 0.2  # 验证集比例
 TEST_RATIO = 0.1  # 测试集比例
 
 # 字符集：数字 + 大写字母 + 小写字母
 CHARACTERS = [str(i) for i in range(10)] + \
-             [chr(ord('A') + i) for i in range(26)] + \
-             [chr(ord('a') + i) for i in range(26)]
+             [chr(ord('A') + i) for i in range(26) if i != 14] + \
+             [chr(ord('a') + i) for i in range(26) if i != 14]
 
 
 # 创建目录结构
 def create_directories():
+    # 创建图像目录
     for folder in ["images/train", "images/val", "images/test"]:
         Path(f"{DATASET_DIR}/{folder}").mkdir(parents=True, exist_ok=True)
 
+    # 创建标签目录
+    for folder in ["labels/train", "labels/val", "labels/test"]:
+        Path(f"{DATASET_DIR}/{folder}").mkdir(parents=True, exist_ok=True)
 
-# 获取随机字体
-def get_random_font():
+
+# 获取字体并调整字符大小
+def get_and_adjust_font(char):
+    # 尝试加载系统字体
+    fonts = [
+        "arial.ttf", "arialbd.ttf", "ariali.ttf",
+        "times.ttf", "timesbd.ttf", "timesi.ttf",
+        "cour.ttf", "courbd.ttf", "couri.ttf",
+        "verdana.ttf", "verdanab.ttf", "verdanai.ttf"
+    ]
+
+    # 初始字体大小
+    font_size = 40
+    best_font = None
+    best_char_img = None
+    img_size = (random.randint(24, 48), random.randint(24, 48))
+    for _ in range(5):  # 最多尝试5次调整大小
+        try:
+            font_path = random.choice(fonts)
+            font = ImageFont.truetype(font_path, font_size)
+
+            # 1. 创建临时图像来测量字符大小
+            temp_img = Image.new('RGBA', (100, 100), (0, 0, 0, 0))
+            temp_draw = ImageDraw.Draw(temp_img)
+
+            # 2. 获取字符边界框
+            bbox = temp_draw.textbbox((0, 0), char, font=font)
+            char_width = bbox[2] - bbox[0]
+            char_height = bbox[3] - bbox[1]
+
+            # 检查字符大小是否接近目标大小
+            if char_width > 0 and char_height > 0:
+                # 3. 创建字符图像
+                char_img = Image.new('RGBA', (char_width, char_height), (0, 0, 0, 0))
+                char_draw = ImageDraw.Draw(char_img)
+                # 4. 截取字符图像（考虑边界框偏移）
+                char_draw.text((-bbox[0], -bbox[1]), char, font=font, fill=(0, 0, 0, 255))
+
+                # 5. 强制调整为32x32大小
+                char_img = char_img.resize(img_size, Image.Resampling.LANCZOS)
+                return char_img, img_size
+
+                # 如果字符大小不合适，调整字体大小
+                scale_factor = min(img_size[0] / char_width, img_size[1] / char_height)
+                font_size = int(font_size * scale_factor * 0.9)
+                font_size = max(10, min(100, font_size))
+        except:
+            continue
+
+    # 如果调整失败，使用默认字体
     try:
-        # 尝试加载系统字体
-        fonts = [
-            "arial.ttf", "arialbd.ttf", "ariali.ttf",
-            "times.ttf", "timesbd.ttf", "timesi.ttf",
-            "cour.ttf", "courbd.ttf", "couri.ttf",
-            "verdana.ttf", "verdanab.ttf", "verdanai.ttf"
-        ]
-        font_path = random.choice(fonts)
-        return ImageFont.truetype(font_path, random.randint(100, 180))
+        font = ImageFont.load_default().font_variant(size=32)
+        char_img = Image.new('RGBA', img_size, (0, 0, 0, 0))
+        char_draw = ImageDraw.Draw(char_img)
+        char_draw.text((0, 0), char, font=font, fill=(0, 0, 0, 255))
+        return char_img, img_size
     except:
-        # 回退到默认字体
-        return ImageFont.load_default()
+        # 创建简单字符图像作为回退
+        char_img = Image.new('RGBA', img_size, (0, 0, 0, 255))
+        draw = ImageDraw.Draw(char_img)
+        draw.text((8, 8), char, fill=(255, 255, 255, 255))
+        return char_img, img_size
 
 
 # 生成单张图像和标签
@@ -51,91 +101,26 @@ def generate_image_and_label(img_id):
     char = random.choice(CHARACTERS)
     char_idx = CHARACTERS.index(char)
 
-    # 随机字体和颜色
-    font = get_random_font()
-    text_color = (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200))
+    # 获取调整后的字符图像
+    char_img, image_size = get_and_adjust_font(char)
 
-    # 创建字符图层
-    bbox = font.getbbox(char)
-    char_width = bbox[2] - bbox[0]
-    char_height = bbox[3] - bbox[1]
+    # 固定位置
+    position = (random.randint(0, 80), random.randint(0, 80))
 
-    # 创建透明图层用于字符变换
-    char_layer = Image.new('RGBA', (char_width, char_height), (0, 0, 0, 0))
-    char_draw = ImageDraw.Draw(char_layer)
-    char_draw.text((-bbox[0], -bbox[1]), char, fill=text_color, font=font)
+    # 将字符图像粘贴到主图像
+    image.paste(char_img, position, char_img)
 
-    # 随机缩放 (1-3倍)
-    scale_factor = random.uniform(1.0, 3.0)
-    scaled_width = int(char_width * scale_factor)
-    scaled_height = int(char_height * scale_factor)
-    scaled_char = char_layer.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
-
-    # 随机旋转 (0-360度)
-    rotation_angle = random.randint(0, 360)
-    rotated_char = scaled_char.rotate(rotation_angle, expand=True, resample=Image.BICUBIC, fillcolor=(0, 0, 0, 0))
-
-    # 获取旋转后字符的实际边界框
-    char_bbox = rotated_char.getbbox()
-    if char_bbox is None:  # 如果没有有效像素，使用整个图像
-        char_bbox = (0, 0, rotated_char.width, rotated_char.height)
-
-    # 计算实际字符区域的尺寸
-    actual_width = char_bbox[2] - char_bbox[0]
-    actual_height = char_bbox[3] - char_bbox[1]
-
-    # 确保字符在图像内 - 计算最大可用位置
-    max_x = IMAGE_SIZE[0] - actual_width
-    max_y = IMAGE_SIZE[1] - actual_height
-
-    # 如果字符太大，缩小到合适尺寸
-    if max_x < 0 or max_y < 0:
-        scale_factor = min(IMAGE_SIZE[0] / actual_width, IMAGE_SIZE[1] / actual_height, 1.0)
-        scaled_width = int(actual_width * scale_factor)
-        scaled_height = int(actual_height * scale_factor)
-        rotated_char = rotated_char.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
-        char_bbox = rotated_char.getbbox()
-        if char_bbox is None:
-            char_bbox = (0, 0, scaled_width, scaled_height)
-        actual_width = char_bbox[2] - char_bbox[0]
-        actual_height = char_bbox[3] - char_bbox[1]
-        max_x = IMAGE_SIZE[0] - actual_width
-        max_y = IMAGE_SIZE[1] - actual_height
-
-    # 随机位置 (确保字符完全在图像内)
-    x = random.randint(0, max_x) if max_x > 0 else 0
-    y = random.randint(0, max_y) if max_y > 0 else 0
-
-    # 调整位置以匹配实际字符区域
-    x -= char_bbox[0]
-    y -= char_bbox[1]
-
-    # 将字符粘贴到主图像
-    image.paste(rotated_char, (x, y), rotated_char)
-
-    # 计算实际边界框在图像中的位置
-    abs_x_min = x + char_bbox[0]
-    abs_y_min = y + char_bbox[1]
-    abs_x_max = abs_x_min + actual_width
-    abs_y_max = abs_y_min + actual_height
-
-    # 确保边界框在图像范围内
-    abs_x_min = max(0, min(IMAGE_SIZE[0] - 1, abs_x_min))
-    abs_y_min = max(0, min(IMAGE_SIZE[1] - 1, abs_y_min))
-    abs_x_max = max(0, min(IMAGE_SIZE[0] - 1, abs_x_max))
-    abs_y_max = max(0, min(IMAGE_SIZE[1] - 1, abs_y_max))
+    # 固定边界框（字符大小32x32）
+    abs_x_min = position[0]
+    abs_y_min = position[1]
+    abs_x_max = position[0] + image_size[0]
+    abs_y_max = position[1] + image_size[1]
 
     # 计算归一化坐标 (YOLO格式)
     center_x = ((abs_x_min + abs_x_max) / 2) / IMAGE_SIZE[0]
     center_y = ((abs_y_min + abs_y_max) / 2) / IMAGE_SIZE[1]
-    width = (abs_x_max - abs_x_min) / IMAGE_SIZE[0]
-    height = (abs_y_max - abs_y_min) / IMAGE_SIZE[1]
-
-    # 确保坐标在[0,1]范围内
-    center_x = max(0.0, min(1.0, center_x))
-    center_y = max(0.0, min(1.0, center_y))
-    width = max(0.0, min(1.0, width))
-    height = max(0.0, min(1.0, height))
+    width = image_size[0] / IMAGE_SIZE[0]
+    height = image_size[1] / IMAGE_SIZE[1]
 
     # 添加干扰线
     for _ in range(random.randint(3, 8)):
@@ -150,16 +135,10 @@ def generate_image_and_label(img_id):
             px = (random.randint(0, IMAGE_SIZE[0] - 1), random.randint(0, IMAGE_SIZE[1] - 1))
             draw.point(px, fill=(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)))
 
-    # 添加随机椭圆作为额外干扰
-    if random.random() > 0.5:
-        x0 = random.randint(0, IMAGE_SIZE[0] // 2)
-        y0 = random.randint(0, IMAGE_SIZE[1] // 2)
-        x1 = random.randint(IMAGE_SIZE[0] // 2, IMAGE_SIZE[0])
-        y1 = random.randint(IMAGE_SIZE[1] // 2, IMAGE_SIZE[1])
-        ellipse_color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-        draw.ellipse([x0, y0, x1, y1], outline=ellipse_color, width=random.randint(1, 2))
+    # YOLO标签格式: <class_id> <center_x> <center_y> <width> <height>
+    yolo_label = f"{char_idx} {center_x:.6f} {center_y:.6f} {width:.6f} {height:.6f}"
 
-    return image, char_idx
+    return image, char_idx, yolo_label
 
 
 # 生成数据集
@@ -177,8 +156,7 @@ def generate_dataset():
     class_counts = {i: 0 for i in range(len(CHARACTERS))}
 
     for idx in range(NUM_IMAGES):
-        img_id = f"{idx:05d}"
-        image, char_idx = generate_image_and_label(idx)
+        image, char_idx, yolo_label = generate_image_and_label(idx)
 
         # 更新类别计数
         class_counts[char_idx] += 1
@@ -191,11 +169,17 @@ def generate_dataset():
         else:
             split = "test"
 
-        # 保存图像和标签
-        image.save(f"{DATASET_DIR}/images/{split}/{char_idx}_{idx:05d}.jpg")
+        # 保存图像
+        image_filename = f"{char_idx}_{idx:05d}.jpg"
+        image.save(f"{DATASET_DIR}/images/{split}/{image_filename}")
+
+        # 保存YOLO标签
+        label_filename = f"{char_idx}_{idx:05d}.txt"
+        with open(f"{DATASET_DIR}/labels/{split}/{label_filename}", "w") as f:
+            f.write(yolo_label)
 
         if (idx + 1) % 100 == 0:
-            print(f"Generated {idx + 1}/{NUM_IMAGES} images")
+            print(f"Generated {idx + 1}/{NUM_IMAGES} images and labels")
 
     # 打印类别分布
     print("\nClass distribution:")
